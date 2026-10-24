@@ -52,7 +52,18 @@ object ColorMath {
 }
 
 /** What the cover looks like: its dominant colour, a clearly different second colour (or null), how much of it is colourful, and its mean brightness. */
-class CoverAnalysis(val primary: Int, val secondary: Int?, val colorfulness: Float, val meanLuma: Float)
+data class CoverAnalysis(
+    val primary: Int,
+    val secondary: Int?,
+    val colorfulness: Float,
+    val meanLuma: Float,
+    val contrast: Float = 0f,
+    val warmBalance: Float = .5f,
+    val edgeDensity: Float = 0f,
+    val negativeSpace: Float = 0f,
+    val complexity: Float = 0f,
+    val confidence: Float = 0f,
+)
 
 /**
  * The colours of one download card. Every role has a job, so the card has a hierarchy and is not just "one colour everywhere":
@@ -82,12 +93,21 @@ object CoverPalette {
     fun analyze(px: IntArray): CoverAnalysis {
         val w = DoubleArray(BINS); val r = DoubleArray(BINS); val g = DoubleArray(BINS); val b = DoubleArray(BINS)
         var n = 0; var colorful = 0; var lumaSum = 0.0
-        var ar = 0.0; var ag = 0.0; var ab = 0.0
+        var ar = 0.0; var ag = 0.0; var ab = 0.0; var lumaSq = 0.0; var warm = 0.0
+        val side = kotlin.math.sqrt(px.size.toDouble()).toInt().coerceAtLeast(1)
+        var edge = 0.0; var edgeSamples = 0.0; var quiet = 0.0
         val t = FloatArray(3)
-        for (p in px) {
+        for ((index, p) in px.withIndex()) {
             if (ColorMath.alpha(p) < 128) continue
-            n++; lumaSum += ColorMath.luminance(p)
+            n++; val lum = ColorMath.luminance(p); lumaSum += lum; lumaSq += lum * lum
             ar += ColorMath.red(p); ag += ColorMath.green(p); ab += ColorMath.blue(p)
+            warm += ((ColorMath.red(p) - ColorMath.blue(p)) / 255.0 + 1.0) / 2.0
+            if (lum >= 0.22 && lum <= 0.78 && ColorMath.alpha(p) >= 128) quiet++
+            val i = index
+            if (i >= side && (i % side) != 0) {
+                val prev = ColorMath.luminance(px[i - side]); val left = ColorMath.luminance(px[i - 1])
+                edge += (kotlin.math.abs(lum - prev) + kotlin.math.abs(lum - left)) / 2.0; edgeSamples++
+            }
             hsv(p, t)
             if (t[2] < 0.2f || t[1] < 0.25f) continue
             colorful++
@@ -95,10 +115,13 @@ object CoverPalette {
             val bin = (((t[0] + 180f / BINS) % 360f) / (360f / BINS)).toInt().coerceIn(0, BINS - 1)
             w[bin] += wt; r[bin] += ColorMath.red(p) * wt; g[bin] += ColorMath.green(p) * wt; b[bin] += ColorMath.blue(p) * wt
         }
-        if (n == 0) return CoverAnalysis(0xFF3F51B5.toInt(), null, 0f, 0.3f)
+        if (n == 0) return CoverAnalysis(0xFF3F51B5.toInt(), null, 0f, 0.3f, confidence = 0f)
         fun binColor(i: Int) = ColorMath.rgb((r[i] / w[i]).toInt(), (g[i] / w[i]).toInt(), (b[i] / w[i]).toInt())
         var best = 0; for (i in 1 until BINS) if (w[i] > w[best]) best = i
-        if (w[best] <= 0.0) return CoverAnalysis(ColorMath.rgb((ar / n).toInt(), (ag / n).toInt(), (ab / n).toInt()), null, 0f, (lumaSum / n).toFloat())
+        val mean = lumaSum / n
+        val contrast = kotlin.math.sqrt((lumaSq / n - mean * mean).coerceAtLeast(0.0)).toFloat()
+        val baseConfidence = (n.toFloat() / px.size.coerceAtLeast(1) * (.55f + colorful.toFloat() / n * .45f)).coerceIn(0f, 1f)
+        if (w[best] <= 0.0) return CoverAnalysis(ColorMath.rgb((ar / n).toInt(), (ag / n).toInt(), (ab / n).toInt()), null, 0f, mean.toFloat(), contrast, (warm / n).toFloat(), (edge / edgeSamples.coerceAtLeast(1.0)).toFloat(), quiet.toFloat() / n, contrast.coerceIn(0f, 1f) * .5f)
         val primary = binColor(best)
         val ph = ColorMath.toHsl(primary)[0]
         var second = -1
@@ -107,7 +130,9 @@ object CoverPalette {
             if (hueDist(ph, ColorMath.toHsl(binColor(i))[0]) < 60f) continue
             if (second < 0 || w[i] > w[second]) second = i
         }
-        return CoverAnalysis(primary, if (second >= 0) binColor(second) else null, colorful.toFloat() / n, (lumaSum / n).toFloat())
+        return CoverAnalysis(primary, if (second >= 0) binColor(second) else null, colorful.toFloat() / n, mean.toFloat(), contrast,
+            (warm / n).toFloat(), (edge / edgeSamples.coerceAtLeast(1.0)).toFloat().coerceIn(0f, 1f), quiet.toFloat() / n,
+            ((colorful.toFloat() / n) * .55f + (edge / edgeSamples.coerceAtLeast(1.0)).toFloat() * .45f).coerceIn(0f, 1f), baseConfidence)
     }
 
     /** Lifts (dark surface) or lowers (light surface) the lightness of a hue until it reaches [minContrast] against [bg]. */

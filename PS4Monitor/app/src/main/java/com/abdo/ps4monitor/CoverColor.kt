@@ -18,13 +18,13 @@ object CoverColor {
     private val entries = ConcurrentHashMap<String, Entry>()
     private val fallbackPalettes = ConcurrentHashMap<Long, Palette>()
 
-    private fun sig(d: Download) = "${d.iconReady}|${d.titleId}|${d.pkgTitle}"
+    private fun sig(d: Download, bmp: Bitmap) = "${d.iconReady}|${d.titleId}|${d.pkgTitle}|${bmp.width}x${bmp.height}|${bmp.getPixel(0, 0)}|${bmp.getPixel(bmp.width / 2, bmp.height / 2)}|${bmp.getPixel(bmp.width - 1, bmp.height - 1)}"
 
     private fun entry(d: Download): Entry? {
         if (!d.iconReady) return null
-        val s = sig(d)
-        entries[d.id]?.let { if (it.sig == s) return it }
         val bmp = PkgStore.bitmap("d:${d.id}", "icon0.png", 48) ?: return null     // unreadable: not cached, tried again next time
+        val s = sig(d, bmp)
+        entries[d.id]?.let { if (it.sig == s) return it }
         val e = Entry(s, CoverPalette.analyze(pixels(bmp)))
         entries[d.id] = e
         return e

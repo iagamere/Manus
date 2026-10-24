@@ -21,7 +21,7 @@ jobs:
           gradle-version: 8.9
       - name: Build
         run: |
-          cd "."
+          cd "PS4Monitor"
           if [ -f gradlew ]; then chmod +x gradlew; ./gradlew assembleDebug --no-daemon --stacktrace; else gradle assembleDebug --no-daemon --stacktrace; fi
       - name: Collect APK
         run: |
